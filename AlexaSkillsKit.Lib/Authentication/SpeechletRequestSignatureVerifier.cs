@@ -15,8 +15,10 @@ namespace AlexaSkillsKit.Authentication
     public class SpeechletRequestSignatureVerifier
     {
         private static Func<string, string> _getCertCacheKey = (string url) => string.Format("{0}_{1}", Sdk.SIGNATURE_CERT_URL_REQUEST_HEADER, url);
+
+        private static readonly TimeSpan _cacheTtl = TimeSpan.FromHours(24);
         private static readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
-        private static readonly HttpClient _client = new HttpClient();
+        private static readonly HttpClient _httpClient = new HttpClient();
 
         /// <summary>
         /// Verifying the Signature Certificate URL per requirements documented at
@@ -35,7 +37,7 @@ namespace AlexaSkillsKit.Authentication
             return
                 certChainUri.Host.Equals(Sdk.SIGNATURE_CERT_URL_HOST, StringComparison.OrdinalIgnoreCase) &&
                 certChainUri.PathAndQuery.StartsWith(Sdk.SIGNATURE_CERT_URL_PATH) &&
-                certChainUri.Scheme == "https://" &&
+                certChainUri.Scheme == "https" &&
                 certChainUri.Port == 443;
         }
 
@@ -58,7 +60,7 @@ namespace AlexaSkillsKit.Authentication
                 cert = RetrieveAndVerifyCertificate(certChainUrl);
                 if (cert == null) return false;
 
-                _cache.Set(certCacheKey, cert, DateTimeOffset.UtcNow.AddHours(24));
+                _cache.Set(certCacheKey, cert, _cacheTtl);
             }
 
             return CheckRequestSignature(serializedSpeechletRequest, expectedSignature, cert);
@@ -83,7 +85,7 @@ namespace AlexaSkillsKit.Authentication
                 cert = await RetrieveAndVerifyCertificateAsync(certChainUrl);
                 if (cert == null) return false;
 
-                _cache.Set(certCacheKey, cert, DateTimeOffset.UtcNow.AddHours(24));
+                _cache.Set(certCacheKey, cert, _cacheTtl);
             }
 
             return CheckRequestSignature(serializedSpeechletRequest, expectedSignature, cert);
@@ -98,7 +100,7 @@ namespace AlexaSkillsKit.Authentication
             // so restrict host to an Alexa controlled subdomain/path
             if (!VerifyCertificateUrl(certChainUrl)) return null;
 
-            var content = _client.GetStringAsync(certChainUrl).ConfigureAwait(false).GetAwaiter().GetResult();
+            var content = _httpClient.GetStringAsync(certChainUrl).ConfigureAwait(false).GetAwaiter().GetResult();
 
             var pemReader = new Org.BouncyCastle.OpenSsl.PemReader(new StringReader(content));
             var cert = (X509Certificate)pemReader.ReadObject();
@@ -175,11 +177,11 @@ namespace AlexaSkillsKit.Authentication
         /// </summary>
         private static bool CheckCertSubjectNames(X509Certificate cert) {
             bool found = false;
-            ArrayList subjectNamesList = (ArrayList)cert.GetSubjectAlternativeNames();
-            for (int i=0; i < subjectNamesList.Count; i++) {
-                ArrayList subjectNames = (ArrayList)subjectNamesList[i];
-                for (int j = 0; j < subjectNames.Count; j++) {
-                    if (subjectNames[j] is String && subjectNames[j].Equals(Sdk.ECHO_API_DOMAIN_NAME)) {
+            ICollection subjectNamesList = cert.GetSubjectAlternativeNames();
+
+            foreach (ICollection subjectNames in subjectNamesList) {
+                foreach (object subjectName in subjectNames) {
+                    if (subjectName is String && subjectName.Equals(Sdk.ECHO_API_DOMAIN_NAME)) {
                         found = true;
                         break;
                     }
